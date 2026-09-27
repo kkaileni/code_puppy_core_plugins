@@ -139,7 +139,7 @@ def test_discover_skips_binary_and_non_utf8(tmp_path):
 
 
 def test_discover_without_ripgrep(monkeypatch, tmp_path):
-    monkeypatch.setattr(chunks_mod, "find_rg", lambda: None)
+    monkeypatch.setattr(chunks_mod, "find_ripgrep", lambda: None)
     with pytest.raises(RuntimeError, match="ripgrep"):
         discover(str(tmp_path))
 

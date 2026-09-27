@@ -11,11 +11,11 @@ from __future__ import annotations
 
 import ast
 import os
-import shutil
 import subprocess
-import sys
 from collections import Counter
 from dataclasses import dataclass, field
+
+from code_puppy.tools.ripgrep import find_ripgrep
 
 MAX_FILES = 20_000
 MAX_CHUNKS = 20_000
@@ -214,22 +214,9 @@ def source_chunks(text: str, path: str) -> tuple[list[Chunk], str]:
     return windows(lines, path), "overlapping-lines"
 
 
-def find_rg() -> str | None:
-    """ripgrep on PATH, else the copy bundled next to this interpreter."""
-    found = shutil.which("rg")
-    if found:
-        return found
-    bin_dir = os.path.dirname(sys.executable)
-    for name in ("rg", "rg.exe"):
-        candidate = os.path.join(bin_dir, name)
-        if os.path.exists(candidate):
-            return candidate
-    return None
-
-
 def list_files(directory: str, glob: str | None = None) -> list[str]:
     """Files ripgrep would search: honours .gitignore, skips hidden files."""
-    rg = find_rg()
+    rg = find_ripgrep()
     if rg is None:
         raise RuntimeError("ripgrep (rg) is required for semantic_grep.")
     args = [rg, "--files", "-0", *(["-g", glob] if glob else []), "--", directory]
