@@ -15,6 +15,7 @@ from .judge import judge
 from .retrieve import rank, terms
 
 MAX_QUERY_CHARS = 2000
+DEFAULT_CANDIDATES = 128
 MAX_CANDIDATES = 256
 EXCERPT_LINES = 12
 EXCERPT_CHARS = 1200
@@ -134,7 +135,7 @@ async def semantic_search(
     *,
     glob: str | None = None,
     limit: int = 5,
-    candidates: int = 48,
+    candidates: int = DEFAULT_CANDIDATES,
     threshold: float = 0.5,
 ) -> SemanticGrepOutput:
     query = query.strip()

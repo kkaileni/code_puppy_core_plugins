@@ -1,10 +1,10 @@
 """Relevance judgments from Jev, TypeSafe's decision model, via Pydantic AI.
 
-This replaces jevgrep's hosted ``/api/v1/grep`` backend. jevgrep documents its
-score as the product of two independent judgments -- the snippet acts on the
-requested *entity*, and it performs the requested *operation* -- so that is
-exactly what we ask. A bounded ``float`` field on a decision model is answered
-with the raw probability of yes, so there is no confidence-margin math to undo.
+Relevance is scored as the product of two independent judgments -- the snippet
+acts on the requested *entity*, and it performs the requested *operation* -- so
+mentioning a concept is not enough; the code must do the thing. A bounded
+``float`` field on a decision model is answered with the raw probability of
+yes, so there is no confidence-margin math to undo.
 
 Every snippet is judged in its own run (its own Jev state), so neighbouring
 snippets never lend each other evidence.

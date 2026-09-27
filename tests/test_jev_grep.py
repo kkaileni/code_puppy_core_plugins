@@ -1,4 +1,4 @@
-"""Tests for the jev_grep plugin (semantic_grep on TypeSafe's Jev).
+"""Tests for the jev_grep plugin (smart_grep on TypeSafe's Jev).
 
 Jev is replaced by a fake ``DecisionModel`` that answers the real decision
 protocol, so Pydantic AI's output-type -> question mapping is exercised for
@@ -138,6 +138,34 @@ def test_discover_skips_binary_and_non_utf8(tmp_path):
     assert found.parsers["python"] == 1
 
 
+async def test_repo_root_scale_snippets_are_shortlisted_not_rejected(
+    monkeypatch, tmp_path
+):
+    """Regression: >20k snippets used to abort the search, so agents searching
+    a repo root fell back to long grep chains. Only the shortlist is judged."""
+    (tmp_path / "big.py").write_text("x = 1\n")
+    many = [Chunk(str(tmp_path / "big.py"), i, i, f"line {i}") for i in range(25_000)]
+    many[24_321] = Chunk(str(tmp_path / "big.py"), 24_321, 24_321, "expired session")
+    monkeypatch.setattr(chunks_mod, "source_chunks", lambda text, path: (many, "x"))
+
+    found = discover(str(tmp_path))
+    assert len(found.chunks) == 25_000
+
+    model = FakeJev("expired")
+    out = await semantic_search(model, "expired session", str(tmp_path))
+    assert out.error is None
+    assert out.coverage.snippets == 25_000 and out.coverage.evaluated == 128
+    assert len(model.requests) == 128  # judged work stays bounded
+    assert out.matches and out.matches[0].start_line == 24_321
+
+
+def test_discover_still_enforces_byte_budget(monkeypatch, tmp_path):
+    (tmp_path / "a.py").write_text("x = 1\n" * 50)
+    monkeypatch.setattr(chunks_mod, "MAX_TOTAL_BYTES", 10)
+    with pytest.raises(RuntimeError, match="32 MiB"):
+        discover(str(tmp_path))
+
+
 def test_discover_without_ripgrep(monkeypatch, tmp_path):
     monkeypatch.setattr(chunks_mod, "find_ripgrep", lambda: None)
     with pytest.raises(RuntimeError, match="ripgrep"):
@@ -223,6 +251,39 @@ async def test_semantic_search_no_match_limit_and_shortlist(tmp_path):
     assert any("lexical shortlist" in w for w in capped.warnings)
 
 
+@pytest.mark.parametrize("requested, expected", [(None, 128), (48, 48), (256, 140)])
+async def test_candidate_budget_default_and_overrides(monkeypatch, requested, expected):
+    from code_puppy_core_plugins.jev_grep import search
+    from code_puppy_core_plugins.jev_grep.chunks import Discovery
+
+    chunks = [Chunk(f"file_{i}.py", 1, 1, "expired") for i in range(140)]
+    monkeypatch.setattr(
+        search, "discover", lambda directory, glob: Discovery(chunks=chunks, files=140)
+    )
+    model = FakeJev("expired")
+    kwargs = {} if requested is None else {"candidates": requested}
+    result = await semantic_search(model, "expired sessions", ".", **kwargs)
+    assert result.coverage.evaluated == expected
+    assert len(model.requests) == expected
+
+
+def test_all_candidate_defaults_and_advertised_schema_agree():
+    import inspect
+
+    from pydantic_ai import Agent
+
+    from code_puppy_core_plugins.jev_grep.search import DEFAULT_CANDIDATES
+
+    assert DEFAULT_CANDIDATES == 128
+    for fn in (semantic_search, tool.run_smart_grep):
+        assert inspect.signature(fn).parameters["candidates"].default == 128
+    agent = Agent(FakeJev("expired"))
+    tool.register_smart_grep(agent)
+    registered = agent._function_toolset.tools["smart_grep"]
+    schema = registered.function_schema.json_schema
+    assert schema["properties"]["candidates"]["default"] == 128
+
+
 async def test_semantic_search_rejects_bad_query(tmp_path):
     out = await semantic_search(FakeJev("x"), "   ", str(tmp_path))
     assert out.error and "1-2000" in out.error
@@ -250,9 +311,96 @@ def _no_key(monkeypatch):
     monkeypatch.setattr(config, "get_api_key", lambda name: "")
 
 
-async def test_tool_requires_api_key(monkeypatch):
+def _set_flag(value: str) -> None:
+    """Write the flag through real config, exactly as `/set smart_grep ...` does
+    (conftest points puppy.cfg at a per-test temp file)."""
+    from code_puppy.config import set_config_value
+
+    set_config_value(config.ENABLED_KEY, value)
+
+
+@pytest.fixture
+def smart_grep_on():
+    _set_flag("on")
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        ("on", True),
+        ("true", True),
+        ("1", True),
+        ("yes", True),
+        ("ON", True),
+        ("off", False),
+        ("false", False),
+        ("0", False),
+        ("nope", False),
+        ("", False),
+    ],
+)
+def test_flag_parses_like_other_boolean_settings(raw, expected):
+    _set_flag(raw)
+    assert config.is_enabled() is expected
+
+
+def test_flag_defaults_off():
+    assert config.is_enabled() is False
+
+
+@pytest.mark.parametrize("flag", ["on", "off", None])
+@pytest.mark.parametrize("has_key", [True, False])
+def test_one_gate_controls_tool_and_prompt(monkeypatch, flag, has_key):
+    """Tool exposure and the prompt policy need BOTH the flag and a key."""
     _no_key(monkeypatch)
-    out = await tool.run_semantic_grep("anything")
+    if has_key:
+        monkeypatch.setenv(config.API_KEY_NAME, "k")
+    if flag is not None:
+        _set_flag(flag)
+    enabled = flag == "on" and has_key
+    assert config.is_available() is enabled
+    assert register_callbacks._advertise_when_configured() == (
+        ["smart_grep"] if enabled else []
+    )
+    assert (register_callbacks._discovery_instructions() is not None) is enabled
+
+
+async def test_execution_rechecks_flag_after_disable(monkeypatch, tmp_path):
+    """An agent built while enabled must stop sending source once turned off."""
+    monkeypatch.setenv(config.API_KEY_NAME, "k")
+    sent = []
+    monkeypatch.setattr(
+        tool, "build_jev_model", lambda name, key: sent.append(1) or FakeJev("x")
+    )
+    (tmp_path / "a.py").write_text(PY_SOURCE)
+    _set_flag("off")
+    out = await tool.run_smart_grep("expired", str(tmp_path))
+    assert out.error and "/set smart_grep on" in out.error
+    assert not sent  # never reached the model
+
+
+def test_smart_grep_declares_itself_speculatable():
+    """Core launches tools early only when they declare this literally True."""
+    from pydantic_ai import Agent
+
+    agent = Agent(FakeJev("x"))
+    tool.register_smart_grep(agent)
+    assert agent._function_toolset.tools["smart_grep"].metadata == {
+        "speculatable": True
+    }
+
+
+def test_settings_use_smart_grep_namespace(monkeypatch):
+    seen = []
+    monkeypatch.setattr(config, "get_value", lambda key: seen.append(key))
+    config.get_jev_model_name()
+    config.get_threshold()
+    assert seen == ["smart_grep_model", "smart_grep_threshold"]
+
+
+async def test_tool_requires_api_key(monkeypatch, smart_grep_on):
+    _no_key(monkeypatch)
+    out = await tool.run_smart_grep("anything")
     assert out.error and all(name in out.error for name in config.API_KEY_NAMES)
 
 
@@ -269,7 +417,9 @@ def test_api_key_precedence_env_then_config_official_then_alias(monkeypatch):
     assert config.get_typesafe_api_key() == "env-official"
 
 
-async def test_tool_reports_failures_instead_of_raising(monkeypatch, tmp_path):
+async def test_tool_reports_failures_instead_of_raising(
+    monkeypatch, tmp_path, smart_grep_on
+):
     monkeypatch.setenv(config.API_KEY_NAME, "k")
 
     class Boom(FakeJev):
@@ -278,7 +428,7 @@ async def test_tool_reports_failures_instead_of_raising(monkeypatch, tmp_path):
 
     monkeypatch.setattr(tool, "build_jev_model", lambda name, key: Boom("x"))
     (tmp_path / "a.py").write_text(PY_SOURCE)
-    out = await tool.run_semantic_grep("expired", str(tmp_path))
+    out = await tool.run_smart_grep("expired", str(tmp_path))
     assert out.error and "backend down" in out.error
 
 
@@ -292,7 +442,9 @@ def test_build_jev_model_is_a_real_typesafe_model():
     assert model.model_name == "jev-1.13.0"
 
 
-async def test_tool_success_path_emits_summary_and_registers(monkeypatch, tmp_path):
+async def test_tool_success_path_emits_summary_and_registers(
+    monkeypatch, tmp_path, smart_grep_on
+):
     from pydantic_ai import Agent
 
     monkeypatch.setenv(config.API_KEY_NAME, "k")
@@ -301,24 +453,72 @@ async def test_tool_success_path_emits_summary_and_registers(monkeypatch, tmp_pa
     monkeypatch.setattr(tool, "emit_info", emitted.append)
     (tmp_path / "auth.py").write_text(PY_SOURCE)
 
-    out = await tool.run_semantic_grep("reject expired sessions", str(tmp_path))
+    out = await tool.run_smart_grep("reject expired sessions", str(tmp_path))
     assert out.error is None and out.matches
-    assert emitted and "semantic_grep" in str(emitted[0])
+    assert emitted and "smart_grep" in str(emitted[0])
 
     agent = Agent(FakeJev("x"))
-    tool.register_semantic_grep(agent)
-    assert "semantic_grep" in agent._function_toolset.tools
+    tool.register_smart_grep(agent)
+    assert "smart_grep" in agent._function_toolset.tools
 
 
-def test_tool_only_advertised_when_configured(monkeypatch):
+def test_tool_only_advertised_when_configured(monkeypatch, smart_grep_on):
     _no_key(monkeypatch)
     assert register_callbacks._advertise_when_configured("code-puppy") == []
     monkeypatch.setenv(config.API_KEY_NAME, "k")
-    assert register_callbacks._advertise_when_configured("code-puppy") == [
-        "semantic_grep"
-    ]
+    assert register_callbacks._advertise_when_configured("code-puppy") == ["smart_grep"]
     [entry] = register_callbacks._register_tools()
-    assert entry["name"] == "semantic_grep"
+    assert entry["name"] == "smart_grep"
+
+
+@pytest.mark.parametrize("name", config.API_KEY_NAMES)
+@pytest.mark.parametrize("source", ["environment", "config"])
+def test_discovery_prompt_follows_live_key_gate(
+    monkeypatch, name, source, smart_grep_on
+):
+    _no_key(monkeypatch)
+    assert register_callbacks._discovery_instructions() is None
+    secret = "test-only-secret-never-in-model-prompt"
+    if source == "environment":
+        monkeypatch.setenv(name, secret)
+    else:
+        monkeypatch.setattr(
+            config, "get_api_key", lambda key: secret if key == name else ""
+        )
+    prompt = register_callbacks._discovery_instructions()
+    assert prompt is not None
+    assert "smart_grep first" in prompt
+    assert "first tool for gathering code" in prompt
+    assert "exhaustive references" in prompt
+    assert "known file directly" in prompt
+    assert "no matches do not prove absence" in prompt
+    assert "fall back to grep" in prompt
+    assert "local-only work" in prompt
+    assert secret not in prompt
+    assert register_callbacks._advertise_when_configured() == ["smart_grep"]
+    _no_key(monkeypatch)
+    assert register_callbacks._discovery_instructions() is None
+    assert register_callbacks._advertise_when_configured() == []
+
+
+def test_discovery_policy_is_registered_as_prompt_hook(monkeypatch):
+    import runpy
+
+    import code_puppy.callbacks as callbacks
+
+    registrations = {}
+    monkeypatch.setattr(
+        callbacks,
+        "register_callback",
+        lambda name, fn: registrations.update({name: fn}),
+    )
+    runpy.run_path(
+        register_callbacks.__file__,
+        run_name="code_puppy_core_plugins.jev_grep._test_registration",
+    )
+    assert registrations["load_prompt"].__name__ == "_discovery_instructions"
+    assert "register_tools" in registrations
+    assert "register_agent_tools" in registrations
 
 
 def test_threshold_config_is_validated(monkeypatch):

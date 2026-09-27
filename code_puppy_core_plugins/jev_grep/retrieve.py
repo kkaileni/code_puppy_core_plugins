@@ -1,4 +1,4 @@
-"""Local BM25 shortlist (port of jevgrep's retrieve.mjs).
+"""Local BM25 shortlist: identifier-aware terms, path/symbol boost, synonyms.
 
 Cheap lexical ranking decides which snippets are worth a Jev judgment. It is
 a shortlist, not a verdict: code with unrelated wording can be missed, which

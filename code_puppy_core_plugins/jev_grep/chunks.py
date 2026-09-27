@@ -1,6 +1,6 @@
 """Discovery and chunking: turn a directory into judgeable source snippets.
 
-A port of jevgrep's client-side chunker. Python files are split along the
+Python files are split along the
 AST (functions and methods stay whole; declarations longer than
 ``SPLIT_LINES`` are split into the blocks inside them so each snippet is one
 behaviour). Every other file falls back to overlapping line windows. Line
@@ -17,8 +17,10 @@ from dataclasses import dataclass, field
 
 from code_puppy.tools.ripgrep import find_ripgrep
 
+# Discovery is bounded by files and bytes only. Snippet count is not capped:
+# only the ranked shortlist is judged, and local BM25 over the ~24k snippets
+# of a repo root takes well under a second.
 MAX_FILES = 20_000
-MAX_CHUNKS = 20_000
 MAX_FILE_BYTES = 1024 * 1024
 MAX_TOTAL_BYTES = 32 * 1024 * 1024
 MAX_CHUNK_CHARS = 12_000
@@ -218,7 +220,7 @@ def list_files(directory: str, glob: str | None = None) -> list[str]:
     """Files ripgrep would search: honours .gitignore, skips hidden files."""
     rg = find_ripgrep()
     if rg is None:
-        raise RuntimeError("ripgrep (rg) is required for semantic_grep.")
+        raise RuntimeError("ripgrep (rg) is required for smart_grep.")
     args = [rg, "--files", "-0", *(["-g", glob] if glob else []), "--", directory]
     proc = subprocess.run(args, capture_output=True, timeout=15, check=False)
     if proc.returncode not in (0, 1):  # 1 == no files
@@ -264,8 +266,4 @@ def discover(directory: str, glob: str | None = None) -> Discovery:
             continue
         found.parsers[parser] += 1
         found.chunks.extend(chunks)
-        if len(found.chunks) > MAX_CHUNKS:
-            raise RuntimeError(
-                f"Search exceeds {MAX_CHUNKS} snippets. Narrow the directory or glob."
-            )
     return found
