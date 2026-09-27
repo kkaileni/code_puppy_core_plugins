@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11,<3.15"
 dependencies = [
     "httpx>=0.24.1,<1",
-    "pydantic-ai-slim[openai,anthropic,mcp]>=2.47.0,<3",
+    "pydantic-ai-slim[openai,anthropic,mcp,typesafe]>=2.51.0,<3",
 ]
 license = {text = "MIT"}
 authors = [{name = "Michael Pfaffenberger"}]
@@ -59,6 +59,7 @@ grok_oauth = "code_puppy_core_plugins.grok_oauth.register_callbacks"
 herdr = "code_puppy_core_plugins.herdr.register_callbacks"
 hook_creator = "code_puppy_core_plugins.hook_creator.register_callbacks"
 hook_manager = "code_puppy_core_plugins.hook_manager.register_callbacks"
+jev_grep = "code_puppy_core_plugins.jev_grep.register_callbacks"
 logfire_oauth = "code_puppy_core_plugins.logfire_oauth.register_callbacks"
 logfire_sessions = "code_puppy_core_plugins.logfire_sessions.register_callbacks"
 mcp_binding_prompt = "code_puppy_core_plugins.mcp_binding_prompt.register_callbacks"
