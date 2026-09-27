@@ -13,6 +13,9 @@ dependencies = [
     "pydantic-ai-slim[openai,anthropic,mcp,typesafe]>=2.51.0,<3",
 ]
 license = {text = "MIT"}
+# Ship third-party notices with every build: MIT requires the notice to
+# accompany ported code (see THIRD_PARTY_NOTICES.md).
+license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
 authors = [{name = "Michael Pfaffenberger"}]
 classifiers = [
     "Programming Language :: Python :: 3",
