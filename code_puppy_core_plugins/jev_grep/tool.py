@@ -12,6 +12,7 @@ from code_puppy.tools.common import resolve_path
 
 from .config import (
     API_KEY_NAME,
+    API_KEY_NAMES,
     get_jev_model_name,
     get_threshold,
     get_typesafe_api_key,
@@ -39,7 +40,10 @@ async def run_semantic_grep(
     api_key = get_typesafe_api_key()
     if not api_key:
         return SemanticGrepOutput(
-            error=f"{API_KEY_NAME} is not set. Run `/set {API_KEY_NAME} <key>` or export it."
+            error=(
+                f"No Jev API key: set {' or '.join(API_KEY_NAMES)} "
+                f"(`/set {API_KEY_NAME} <key>` or export it)."
+            )
         )
     directory = resolve_path(directory)
     try:

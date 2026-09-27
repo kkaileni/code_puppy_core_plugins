@@ -6,13 +6,23 @@ import os
 
 from code_puppy.config import get_api_key, get_value
 
-API_KEY_NAME = "TYPESAFE_API_KEY"
+# TypeSafe's official name first, then the Jev-branded alias. Config lookup
+# is case-insensitive, so `/set jev_api_key ...` matches JEV_API_KEY.
+API_KEY_NAMES = ("TYPESAFE_API_KEY", "JEV_API_KEY")
+API_KEY_NAME = API_KEY_NAMES[0]
 DEFAULT_MODEL = "jev-latest"
 DEFAULT_THRESHOLD = 0.5
 
 
 def get_typesafe_api_key() -> str:
-    return os.environ.get(API_KEY_NAME) or get_api_key(API_KEY_NAME)
+    """First key found: environment beats config, official name beats alias."""
+    for name in API_KEY_NAMES:
+        if key := os.environ.get(name):
+            return key
+    for name in API_KEY_NAMES:
+        if key := get_api_key(name):
+            return key
+    return ""
 
 
 def get_jev_model_name() -> str:

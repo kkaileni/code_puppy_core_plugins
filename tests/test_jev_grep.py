@@ -242,10 +242,31 @@ async def test_overlapping_windows_dedupe_and_excerpt_is_capped(tmp_path):
 # ---------------------------------------------------------------- tool + wiring
 
 
+def _no_key(monkeypatch):
+    """No key anywhere: the developer's shell AND shared credential store
+    (``get_api_key`` reads the latter first; conftest only isolates puppy.cfg)."""
+    for name in config.API_KEY_NAMES:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(config, "get_api_key", lambda name: "")
+
+
 async def test_tool_requires_api_key(monkeypatch):
-    monkeypatch.delenv(config.API_KEY_NAME, raising=False)
+    _no_key(monkeypatch)
     out = await tool.run_semantic_grep("anything")
-    assert out.error and config.API_KEY_NAME in out.error
+    assert out.error and all(name in out.error for name in config.API_KEY_NAMES)
+
+
+def test_api_key_precedence_env_then_config_official_then_alias(monkeypatch):
+    _no_key(monkeypatch)
+    stored = {"JEV_API_KEY": "cfg-alias"}
+    monkeypatch.setattr(config, "get_api_key", lambda name: stored.get(name, ""))
+    assert config.get_typesafe_api_key() == "cfg-alias"  # `/set jev_api_key` works
+    stored["TYPESAFE_API_KEY"] = "cfg-official"
+    assert config.get_typesafe_api_key() == "cfg-official"
+    monkeypatch.setenv("JEV_API_KEY", "env-alias")
+    assert config.get_typesafe_api_key() == "env-alias"  # env beats config
+    monkeypatch.setenv("TYPESAFE_API_KEY", "env-official")
+    assert config.get_typesafe_api_key() == "env-official"
 
 
 async def test_tool_reports_failures_instead_of_raising(monkeypatch, tmp_path):
@@ -290,7 +311,7 @@ async def test_tool_success_path_emits_summary_and_registers(monkeypatch, tmp_pa
 
 
 def test_tool_only_advertised_when_configured(monkeypatch):
-    monkeypatch.delenv(config.API_KEY_NAME, raising=False)
+    _no_key(monkeypatch)
     assert register_callbacks._advertise_when_configured("code-puppy") == []
     monkeypatch.setenv(config.API_KEY_NAME, "k")
     assert register_callbacks._advertise_when_configured("code-puppy") == [
