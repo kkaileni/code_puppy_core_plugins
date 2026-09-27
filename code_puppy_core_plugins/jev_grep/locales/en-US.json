@@ -1,0 +1,3 @@
+{
+  "jev_grep.summary": "semantic_grep '{query}' in {directory}: {matches} matches ({evaluated}/{snippets} snippets judged)"
+}
